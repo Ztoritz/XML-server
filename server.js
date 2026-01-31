@@ -3,6 +3,11 @@ const { XMLParser, XMLBuilder } = require('fast-xml-parser');
 const fs = require('fs');
 const path = require('path');
 
+// Enable CORS explicitly
+fastify.register(require('@fastify/cors'), {
+    origin: true // Allow all origins (for development ease) or specify specific
+});
+
 // Ensure storage directory exists
 const STORAGE_DIR = path.join(__dirname, 'xml-storage');
 if (!fs.existsSync(STORAGE_DIR)) {
