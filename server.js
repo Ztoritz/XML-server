@@ -4,8 +4,11 @@ const fs = require('fs');
 const path = require('path');
 
 // Enable CORS explicitly
+// Enable CORS explicitly - Relaxed for debugging
 fastify.register(require('@fastify/cors'), {
-    origin: true // Allow all origins (for development ease) or specify specific
+    origin: '*', // Allow ALL origins explicitly
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 });
 
 // Ensure storage directory exists
