@@ -1,137 +1,142 @@
 const express = require('express');
 const cors = require('cors');
-const { XMLParser, XMLBuilder } = require('fast-xml-parser');
+const http = require('http'); // Required for Socket.io + Express
+const { Server } = require("socket.io");
 const fs = require('fs');
 const path = require('path');
 
-const app = express();
-
 // --- CONFIGURATION ---
 const PORT = process.env.PORT || 3000;
-const STORAGE_DIR = path.join(__dirname, 'xml-storage');
+const DATA_DIR = path.join(__dirname, 'data');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 
-// Config options
-const PARSER_OPTIONS = {
-    ignoreAttributes: false,
-    attributeNamePrefix: "",
-    parseAttributeValue: true,
-    trimValues: true
-};
-
-const BUILDER_OPTIONS = {
-    ignoreAttributes: false,
-    format: true
-};
-
-// --- MIDDLEWARE ---
-
-// 1. Logging
-app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-    next();
-});
-
-// 2. CORS (Allow All)
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
-
-// 3. XML Body Parser
-// Express doesn't parse XML body by default, we read it as string
-app.use(express.text({ type: ['text/xml', 'application/xml'], limit: '10mb' }));
-// Also parse JSON for generation endpoint
+// --- EXPRESS SETUP ---
+const app = express();
+app.use(cors()); // Allow all
 app.use(express.json());
 
-// --- STORAGE ---
-if (!fs.existsSync(STORAGE_DIR)) {
-    try {
-        fs.mkdirSync(STORAGE_DIR);
-    } catch (err) {
-        console.error("Failed to create storage dir:", err);
+// --- HTTP SERVER & SOCKET.IO ---
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: {
+        origin: "*", // Allow Mobile & SYNK from anywhere
+        methods: ["GET", "POST"]
     }
+});
+
+// --- PERSISTENCE LAYER ---
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// In-Memory Store
-let activeOrders = [];
+// In-Memory State (Loaded from file)
+let state = {
+    activeOrders: [],
+    archivedOrders: []
+};
 
-// --- ROUTES ---
-
-// Health Check
-app.get('/', (req, res) => {
-    res.json({ service: 'XML Exchange Server', status: 'Healthy', version: '2.0.0 (Express)' });
-});
-
-// 1. Process Order (Receive XML)
-app.post('/api/parse', (req, res) => {
-    const start = process.hrtime();
-
-    let archivedOrders = [];
-
-    // Helper: Generate XML for ERP/Vault Simulation
-    const generateXmlReport = (order) => {
-        const timestamp = new Date().toISOString();
-        let xml = `<MeasurementReport timestamp="${timestamp}">
-  <RequestId>${order.id}</RequestId>
-  <ArticleNumber>${order.articleNumber}</ArticleNumber>
-  <DrawingNumber>${order.drawingNumber}</DrawingNumber>
-  <Controller>${order.controller || 'Unknown'}</Controller>
-  <Results>
-`;
-        if (order.results) {
-            order.results.forEach(r => {
-                xml += `    <Parameter id="${r.id}">
-      <Description>${r.def?.gdtType || 'DIM'}</Description>
-      <Nominal>${r.def?.nominal}</Nominal>
-      <Measured>${r.measured}</Measured>
-      <Status>${r.status}</Status>
-    </Parameter>
-`;
-            });
+// Load Data
+const loadData = () => {
+    try {
+        if (fs.existsSync(ORDERS_FILE)) {
+            const raw = fs.readFileSync(ORDERS_FILE, 'utf8');
+            state = JSON.parse(raw);
+            console.log(`📦 Loaded ${state.activeOrders.length} active, ${state.archivedOrders.length} archived orders.`);
+        } else {
+            console.log("🆕 No previous data found. Starting fresh.");
         }
-        xml += `  </Results>
-</MeasurementReport>`;
-        return xml;
-    };
-
-    io.on('connection', (socket) => {
-        console.log('Client connected:', socket.id);
-
-        // Send current state immediately on connection
-        socket.emit('init_state', { activeOrders, archivedOrders });
-
-        // 1. New Order from SYNK
-        socket.on('create_order', (orderData) => {
-            console.log('Received Order:', orderData.articleNumber);
-
-            const newOrder = {
-                ...orderData,
-                status: 'PENDING',
-                receivedAt: new Date().toISOString()
-            };
-
-            // Add to state
-            activeOrders.push(newOrder);
-        } catch (fsErr) {
-            console.error("Failed to save XML file (Permissions?):", fsErr.message);
-        }
-
-        res.type('application/xml').send(xml);
     } catch (err) {
-        console.error("XML Gen Error:", err);
-        res.status(500).json({ error: "XML Generation Failed" });
+        console.error("❌ Failed to load data:", err);
     }
+};
+
+// Save Data (Debounced could be better, but direct is safer for now)
+const saveData = () => {
+    try {
+        fs.writeFileSync(ORDERS_FILE, JSON.stringify(state, null, 2));
+        console.log("💾 Data Saved.");
+    } catch (err) {
+        console.error("❌ Failed to save data:", err);
+    }
+};
+
+// Initial Load
+loadData();
+
+// --- SOCKET.IO EVENTS ---
+io.on('connection', (socket) => {
+    console.log(`🔌 Client connected: ${socket.id}`);
+
+    // 1. Send Full State immediately (Active + History)
+    // This fixes "Archive missing in app"
+    socket.emit('init_state', state);
+
+    // 2. Handle New Order (From SYNK)
+    socket.on('create_order', (order) => {
+        console.log(`📝 New Order: ${order.articleNumber}`);
+
+        // Add ID if missing (fail-safe)
+        if (!order.id) order.id = `O-${Date.now()}`;
+
+        // Add to Active
+        state.activeOrders.unshift(order); // Newest first
+        saveData();
+
+        // Broadcast to EVERYONE (Mobile gets it instantly)
+        io.emit('order_created', order);
+        io.emit('active_orders_update', state.activeOrders); // Force list update
+    });
+
+    // 3. Handle Measurement Submission (From Mobile)
+    socket.on('submit_measurement', (paymentPayload) => {
+        const { id, results, controller } = paymentPayload;
+        console.log(`✅ Measurement received for: ${id}`);
+
+        // Find Order
+        const orderIndex = state.activeOrders.findIndex(o => o.id === id);
+        if (orderIndex === -1) {
+            console.error("⚠️ Order not found in active list!");
+            return;
+        }
+
+        const order = state.activeOrders[orderIndex];
+
+        // Move to Archive
+        const completedOrder = {
+            ...order,
+            status: 'COMPLETED', // Or calculate OK/FAIL based on results
+            completedAt: new Date().toISOString(),
+            results: results,
+            controller: controller
+        };
+
+        // Check Status (Generic OK/FAIL check)
+        const isOk = results.every(r => r.status === 'OK');
+        completedOrder.status = isOk ? 'OK' : 'FAIL';
+
+        // Update State
+        state.activeOrders.splice(orderIndex, 1);
+        state.archivedOrders.unshift(completedOrder);
+        saveData();
+
+        // Broadcast Completion (Removes from Inbox, Adds to Archive for all)
+        io.emit('order_completed', completedOrder);
+        io.emit('active_orders_update', state.activeOrders); // Ensure inbox is clear
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`🔌 Client disconnected: ${socket.id}`);
+    });
 });
 
-// Error Handling
-app.use((err, req, res, next) => {
-    console.error("Unhandled Error:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+// --- REST API FALLBACK (Optional, for debugging) ---
+app.get('/api/state', (req, res) => {
+    res.json(state);
 });
 
-// --- SERVER START ---
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 XML Server (Express) running on port ${PORT}`);
-    console.log(`📂 Storage: ${STORAGE_DIR}`);
+// --- START SERVER ---
+// Important: Listen on 'server' (HTTP+Socket), not just 'app'
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Real-Time Server running on port ${PORT}`);
+    console.log(`📂 Data Persisted in: ${ORDERS_FILE}`);
 });
