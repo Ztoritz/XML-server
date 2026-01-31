@@ -1,5 +1,13 @@
 const fastify = require('fastify')({ logger: true });
 const { XMLParser, XMLBuilder } = require('fast-xml-parser');
+const fs = require('fs');
+const path = require('path');
+
+// Ensure storage directory exists
+const STORAGE_DIR = path.join(__dirname, 'xml-storage');
+if (!fs.existsSync(STORAGE_DIR)) {
+    fs.mkdirSync(STORAGE_DIR);
+}
 
 // --- OPTIMERAD XML KONFIGURATION ---
 const parser = new XMLParser({
@@ -58,6 +66,14 @@ fastify.post('/api/generate', async (request, reply) => {
     try {
         const jsonData = request.body; // Förväntar sig JSON
         const xml = builder.build(jsonData);
+
+        // Save to file
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `measurement-${timestamp}.xml`;
+        const filepath = path.join(STORAGE_DIR, filename);
+
+        fs.writeFileSync(filepath, xml);
+        console.log(`Saved XML to: ${filepath}`);
 
         reply.type('application/xml');
         return xml;
