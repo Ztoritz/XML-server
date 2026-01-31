@@ -2,9 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Installera enbart produktionsberoenden (snabbare, mindre image)
+# Installera enbart produktionsberoenden
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm install --only=production
 
 # Kopiera källkod
 COPY . .
