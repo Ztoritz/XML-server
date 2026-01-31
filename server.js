@@ -14,6 +14,9 @@ if (!fs.existsSync(STORAGE_DIR)) {
     fs.mkdirSync(STORAGE_DIR);
 }
 
+// Global In-Memory Store
+let activeOrders = [];
+
 // --- OPTIMERAD XML KONFIGURATION ---
 const parser = new XMLParser({
     ignoreAttributes: false,
@@ -50,6 +53,26 @@ fastify.post('/api/parse', async (request, reply) => {
         // Snabb parsing till JSON
         const result = parser.parse(xmlData);
 
+        // Store in memory
+        // Map XML structure to App expectation if possible, or store raw
+        // Expecting XML like: <Order><Id>123</Id><Article>...</Article></Order>
+        // Parser with 'ignoreAttributes: false' might put attributes in different places
+        // We'll wrap it in a normalized structure
+        const timestamp = new Date().toISOString();
+        const orderId = result.Id || result.Order?.Id || `REQ-${Date.now()}`;
+
+        const newOrder = {
+            id: orderId,
+            article: result.Article || result.Order?.Article || "Unknown",
+            drawing: result.Drawing || result.Order?.Drawing || "Unknown",
+            status: 'WAITING',
+            rawData: result,
+            receivedAt: timestamp
+        };
+
+        activeOrders.push(newOrder);
+        console.log("New Order Received:", newOrder);
+
         // Mät prestanda
         const endObj = process.hrtime(startObj);
         const ms = (endObj[0] * 1000 + endObj[1] / 1e6).toFixed(2);
@@ -57,6 +80,8 @@ fastify.post('/api/parse', async (request, reply) => {
         return {
             success: true,
             processingTime: `${ms}ms`,
+            message: "Order queued",
+            orderId: orderId,
             data: result
         };
 
@@ -64,6 +89,11 @@ fastify.post('/api/parse', async (request, reply) => {
         request.log.error(err);
         reply.code(400).send({ success: false, error: "XML Parsing Failed: " + err.message });
     }
+});
+
+// 1b. Hämta aktiva ordrar (Mätstation -> Server)
+fastify.get('/api/orders', async (request, reply) => {
+    return activeOrders;
 });
 
 // 2. Generera XML (Server -> System)
@@ -90,8 +120,9 @@ fastify.post('/api/generate', async (request, reply) => {
 // Starta servern
 const start = async () => {
     try {
-        await fastify.listen({ port: 3000, host: '0.0.0.0' });
-        console.log(`🚀 XML Server optimerad och körs på port 3000`);
+        const PORT = process.env.PORT || 3000;
+        await fastify.listen({ port: PORT, host: '0.0.0.0' });
+        console.log(`🚀 XML Server optimerad och körs på port ${PORT}`);
     } catch (err) {
         fastify.log.error(err);
         process.exit(1);
