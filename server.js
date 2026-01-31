@@ -67,75 +67,52 @@ app.get('/', (req, res) => {
 app.post('/api/parse', (req, res) => {
     const start = process.hrtime();
 
-    try {
-        const xmlData = req.body;
-        if (!xmlData || typeof xmlData !== 'string') {
-            return res.status(400).json({ success: false, error: "No XML body received" });
-        }
+    let archivedOrders = [];
 
-        const parser = new XMLParser(PARSER_OPTIONS);
-        const result = parser.parse(xmlData);
-
-        // Normalized Order Structure
+    // Helper: Generate XML for ERP/Vault Simulation
+    const generateXmlReport = (order) => {
         const timestamp = new Date().toISOString();
+        let xml = `<MeasurementReport timestamp="${timestamp}">
+  <RequestId>${order.id}</RequestId>
+  <ArticleNumber>${order.articleNumber}</ArticleNumber>
+  <DrawingNumber>${order.drawingNumber}</DrawingNumber>
+  <Controller>${order.controller || 'Unknown'}</Controller>
+  <Results>
+`;
+        if (order.results) {
+            order.results.forEach(r => {
+                xml += `    <Parameter id="${r.id}">
+      <Description>${r.def?.gdtType || 'DIM'}</Description>
+      <Nominal>${r.def?.nominal}</Nominal>
+      <Measured>${r.measured}</Measured>
+      <Status>${r.status}</Status>
+    </Parameter>
+`;
+            });
+        }
+        xml += `  </Results>
+</MeasurementReport>`;
+        return xml;
+    };
 
-        // Handle various potential XML structures (nested or flat)
-        // Support <Order><Id>...</Id></Order> AND <MeasurementRequest id="...">...</MeasurementRequest>
-        const root = result.Order || result.order || result.MeasurementRequest || result;
+    io.on('connection', (socket) => {
+        console.log('Client connected:', socket.id);
 
-        const orderId = root.Id || root.id || result.Id || `REQ-${Date.now()}`;
-        const article = root.Article || root.article || root.ArticleNumber || result.Article || "Unknown";
-        const drawing = root.Drawing || root.drawing || root.DrawingNumber || result.Drawing || "Unknown";
+        // Send current state immediately on connection
+        socket.emit('init_state', { activeOrders, archivedOrders });
 
-        const newOrder = {
-            id: String(orderId),
-            article: article,
-            drawing: drawing,
-            status: 'WAITING',
-            rawData: result,
-            receivedAt: timestamp
-        };
+        // 1. New Order from SYNK
+        socket.on('create_order', (orderData) => {
+            console.log('Received Order:', orderData.articleNumber);
 
-        activeOrders.push(newOrder);
-        console.log("New Order Queued:", newOrder.id);
+            const newOrder = {
+                ...orderData,
+                status: 'PENDING',
+                receivedAt: new Date().toISOString()
+            };
 
-        const end = process.hrtime(start);
-        const ms = (end[0] * 1000 + end[1] / 1e6).toFixed(2);
-
-        res.json({
-            success: true,
-            processingTime: `${ms}ms`,
-            message: "Order queued",
-            orderId: orderId,
-            data: result
-        });
-
-    } catch (err) {
-        console.error("XML Parse Error:", err);
-        res.status(400).json({ success: false, error: "XML Parsing Failed: " + err.message });
-    }
-});
-
-// 1b. Get Orders
-app.get('/api/orders', (req, res) => {
-    res.json(activeOrders);
-});
-
-// 2. Generate XML
-app.post('/api/generate', (req, res) => {
-    try {
-        const jsonData = req.body;
-        const builder = new XMLBuilder(BUILDER_OPTIONS);
-        const xml = builder.build(jsonData);
-
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const filename = `measurement-${timestamp}.xml`;
-
-        // Try saving, but don't fail request if FS fails (e.g. permission issues)
-        try {
-            const filepath = path.join(STORAGE_DIR, filename);
-            fs.writeFileSync(filepath, xml);
-            console.log(`Saved XML to: ${filepath}`);
+            // Add to state
+            activeOrders.push(newOrder);
         } catch (fsErr) {
             console.error("Failed to save XML file (Permissions?):", fsErr.message);
         }
