@@ -78,13 +78,19 @@ app.post('/api/parse', (req, res) => {
 
         // Normalized Order Structure
         const timestamp = new Date().toISOString();
+
         // Handle various potential XML structures (nested or flat)
-        const orderId = result.Id || result.Order?.Id || result.order?.id || `REQ-${Date.now()}`;
+        // Support <Order><Id>...</Id></Order> AND <MeasurementRequest id="...">...</MeasurementRequest>
+        const root = result.Order || result.order || result.MeasurementRequest || result;
+
+        const orderId = root.Id || root.id || result.Id || `REQ-${Date.now()}`;
+        const article = root.Article || root.article || root.ArticleNumber || result.Article || "Unknown";
+        const drawing = root.Drawing || root.drawing || root.DrawingNumber || result.Drawing || "Unknown";
 
         const newOrder = {
             id: String(orderId),
-            article: result.Article || result.Order?.Article || result.order?.article || "Unknown",
-            drawing: result.Drawing || result.Order?.Drawing || result.order?.drawing || "Unknown",
+            article: article,
+            drawing: drawing,
             status: 'WAITING',
             rawData: result,
             receivedAt: timestamp
