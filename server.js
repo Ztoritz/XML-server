@@ -129,6 +129,15 @@ io.on('connection', (socket) => {
         io.emit('active_orders_update', state.activeOrders);
     });
 
+    // 4. Handle Reset (Clear all orders)
+    socket.on('reset_state', () => {
+        console.log("⚠️ RESET command received. Clearing all orders.");
+        state.activeOrders = [];
+        state.archivedOrders = [];
+        saveData();
+        io.emit('init_state', state); // Broadcast empty state to all clients
+    });
+
     socket.on('disconnect', () => {
         // console.log(`🔌 Client disconnected: ${socket.id}`);
     });
