@@ -32,7 +32,8 @@ if (!fs.existsSync(DATA_DIR)) {
 // In-Memory State (Loaded from file)
 let state = {
     activeOrders: [],
-    archivedOrders: []
+    archivedOrders: [],
+    operators: ['Niklas Jalvemyr', 'Olle Ljungberg'] // Default
 };
 
 // Load Data
@@ -66,6 +67,11 @@ const loadData = () => {
             state.activeOrders = uniqueActive.filter(o => !archiveIds.has(o.id));
             state.archivedOrders = uniqueArchive;
 
+            // Ensure operators exist
+            if (!state.operators || !Array.isArray(state.operators)) {
+                state.operators = ['Niklas Jalvemyr', 'Olle Ljungberg'];
+            }
+
             // Save clean state immediately if changed
             if (
                 state.activeOrders.length !== uniqueActive.length ||
@@ -75,14 +81,14 @@ const loadData = () => {
                 saveData();
             }
 
-            console.log(`📦 Loaded ${state.activeOrders.length} active, ${state.archivedOrders.length} archived orders.`);
+            console.log(`📦 Loaded ${state.activeOrders.length} active, ${state.archivedOrders.length} archived orders, ${state.operators.length} operators.`);
         } else {
             console.log("🆕 No previous data found. Starting fresh.");
         }
     } catch (err) {
         console.error("❌ Failed to load data:", err);
         // Fallback to empty
-        state = { activeOrders: [], archivedOrders: [] };
+        state = { activeOrders: [], archivedOrders: [], operators: ['Niklas Jalvemyr', 'Olle Ljungberg'] };
     }
 };
 
@@ -186,6 +192,14 @@ io.on('connection', (socket) => {
 
     socket.on('disconnect', () => {
         // console.log(`🔌 Client disconnected: ${socket.id}`);
+    });
+
+    // 5. Handle Operator Updates (Centralized List)
+    socket.on('update_operators', (newOperatorList) => {
+        console.log(`busts Updating Operator List: ${newOperatorList.length} operators`);
+        state.operators = newOperatorList;
+        saveData();
+        io.emit('operators_updated', state.operators); // Broadcast new list to all (Desktop & Mobile)
     });
 });
 
