@@ -101,16 +101,21 @@ io.on('connection', (socket) => {
 
         const order = state.activeOrders[orderIndex];
 
+        // Generate Serial Number (M-[Drawing]-[Count])
+        const existingCount = state.archivedOrders.filter(o => o.drawingNumber === order.drawingNumber).length;
+        const serialNumber = `M-${order.drawingNumber || 'GEN'}-${(existingCount + 1).toString().padStart(3, '0')}`;
+
         // Move to Archive
         const completedOrder = {
             ...order,
-            status: 'COMPLETED', // Or calculate OK/FAIL based on results
+            status: 'COMPLETED',
             completedAt: new Date().toISOString(),
             results: results,
-            controller: controller
+            controller: controller,
+            serialNumber: serialNumber // Add Serial
         };
 
-        // Check Status (Generic OK/FAIL check)
+        // Check Status
         const isOk = results.every(r => r.status === 'OK');
         completedOrder.status = isOk ? 'OK' : 'FAIL';
 
@@ -119,9 +124,9 @@ io.on('connection', (socket) => {
         state.archivedOrders.unshift(completedOrder);
         saveData();
 
-        // Broadcast Completion (Removes from Inbox, Adds to Archive for all)
+        // Broadcast Completion
         io.emit('order_completed', completedOrder);
-        io.emit('active_orders_update', state.activeOrders); // Ensure inbox is clear
+        io.emit('active_orders_update', state.activeOrders);
     });
 
     socket.on('disconnect', () => {
