@@ -36,17 +36,53 @@ let state = {
 };
 
 // Load Data
+// Load Data with Cleanup
 const loadData = () => {
     try {
         if (fs.existsSync(ORDERS_FILE)) {
             const raw = fs.readFileSync(ORDERS_FILE, 'utf8');
             state = JSON.parse(raw);
+
+            // CLEANUP: Remove duplicates
+            const uniqueActive = [];
+            const activeIds = new Set();
+            for (const o of state.activeOrders) {
+                if (!activeIds.has(o.id)) {
+                    activeIds.add(o.id);
+                    uniqueActive.push(o);
+                }
+            }
+
+            const uniqueArchive = [];
+            const archiveIds = new Set();
+            for (const o of state.archivedOrders) {
+                if (!archiveIds.has(o.id)) {
+                    archiveIds.add(o.id);
+                    uniqueArchive.push(o);
+                }
+            }
+
+            // CONFLICT RESOLUTION: Archive wins over Active
+            state.activeOrders = uniqueActive.filter(o => !archiveIds.has(o.id));
+            state.archivedOrders = uniqueArchive;
+
+            // Save clean state immediately if changed
+            if (
+                state.activeOrders.length !== uniqueActive.length ||
+                state.archivedOrders.length !== uniqueArchive.length
+            ) {
+                console.log("🧹 Cleaned up duplicates/conflicts in orders.json");
+                saveData();
+            }
+
             console.log(`📦 Loaded ${state.activeOrders.length} active, ${state.archivedOrders.length} archived orders.`);
         } else {
             console.log("🆕 No previous data found. Starting fresh.");
         }
     } catch (err) {
         console.error("❌ Failed to load data:", err);
+        // Fallback to empty
+        state = { activeOrders: [], archivedOrders: [] };
     }
 };
 
@@ -76,6 +112,15 @@ io.on('connection', (socket) => {
 
         // Add ID if missing (fail-safe)
         if (!order.id) order.id = `O-${Date.now()}`;
+
+        // Deduplicate: Check Active AND Archive
+        const existsActive = state.activeOrders.some(o => o.id === order.id);
+        const existsArchive = state.archivedOrders.some(o => o.id === order.id);
+
+        if (existsActive || existsArchive) {
+            console.warn(`⚠️ Duplicate Order ID blocked: ${order.id}`);
+            return;
+        }
 
         // Add to Active
         state.activeOrders.unshift(order); // Newest first
