@@ -133,7 +133,7 @@ io.on('connection', (socket) => {
 
     // 3. Handle Measurement Submission (From Mobile)
     socket.on('submit_measurement', (paymentPayload) => {
-        const { id, results, controller } = paymentPayload;
+        const { id, results, controller, xml } = paymentPayload; // Extract XML
         console.log(`✅ Measurement received for: ${id}`);
 
         // Find Order
@@ -157,7 +157,8 @@ io.on('connection', (socket) => {
             completedAt: new Date().toISOString(),
             results: results,
             controller: controller,
-            serialNumber: serialNumber // Persist standard serial
+            serialNumber: serialNumber,
+            xml: xml // Persist XML for report card fallback
         };
 
         // Check Status (Generic OK/FAIL check)
